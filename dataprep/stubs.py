@@ -1,15 +1,12 @@
 import re
 import os
 import argparse
-import logging
-
-# Setup basic logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 # Regex patterns
 # This code defines and compiles several regular expression patterns to match C/C++ variable declarations, function calls, single-line and multi-line comments, and struct type definitions.
 VAR_DECL_REGEX_SIMPLE_V2 = re.compile(
     r"^\s*([a-zA-Z_][\w\s\*<>.:&]*?(?<!\w))\s+([a-zA-Z_]\w*)(\s*\[[^\]]*\])?\s*(?:=.*?)?;"
+    # type modifier - pointer - brackets(array) - semicolon
 )
 VAR_DECL_REGEX_SIMPLE = re.compile(
     r"^\s*(static\s+|extern\s+|const\s+|volatile\s+)*"
@@ -18,12 +15,15 @@ VAR_DECL_REGEX_SIMPLE = re.compile(
     r"\s+([a-zA-Z_]\w*)"
     r"(\s*\[[^\]]*\])?\s*"
     r"(?:=.*)?;"
+    # for structs
+    # storage class - type - varname - brackets(array) - semicolon
 )
 FUNC_CALL_REGEX = re.compile(
     r"^\s*(?:([a-zA-Z_]\w*)\s*=\s*)?"
     r"(?:\(\s*([a-zA-Z_][\w\s\*<>.:&]+)\s*\)\s*)?"
     r"([a-zA-Z_]\w*(?:::[a-zA-Z_]\w*)*)\s*"
     r"\((.*?)\)\s*;"
+    # var - function name - function arguments - semicolon
 )
 SINGLE_LINE_COMMENT_REGEX = re.compile(r"//.*")
 MULTI_LINE_COMMENT_REGEX = re.compile(r"/\*.*?\*/", re.DOTALL)
@@ -164,14 +164,14 @@ def main():
 
     cpp_filepath = args.cpp_file_path
     if not os.path.isfile(cpp_filepath):
-        logging.error(f"File not found: {cpp_filepath}")
+        print(f"ERROR: File not found: {cpp_filepath}")
         return
 
     try:
         with open(cpp_filepath, 'r', encoding='utf-8') as f:
             content = f.read()
     except Exception as e:
-        logging.error(f"Error reading file {cpp_filepath}: {e}")
+        print(f"ERROR: Error reading file {cpp_filepath}: {e}")
         return
 
     content_no_comments = strip_comments(content)
@@ -182,7 +182,7 @@ def main():
     undefined_constants = set()
     used_struct_names = set() # To store names of structs used in types
 
-    logging.info("--- Pass 1: Identifying variable declarations ---")
+    print("Identifying variable declarations")
     for line_num, line in enumerate(lines):
         line = line.strip()
         match = VAR_DECL_REGEX_SIMPLE_V2.match(line)
@@ -207,7 +207,7 @@ def main():
                 var_name = groups[1]
                 array_spec = groups[2]
             else:
-                logging.warning(f"Line {line_num+1}: Regex matched but group structure unexpected: {line}")
+                print(f"WARNING: Line {line_num+1}: Regex matched but group structure unexpected: {line}")
                 continue
             
             if array_spec:
@@ -217,17 +217,13 @@ def main():
             full_type = clean_type(full_type.replace(" *", "*").replace(" &", "&"))
 
             if var_name in variable_types:
-                logging.warning(f"Line {line_num+1}: Variable '{var_name}' redefined. Using first: '{variable_types[var_name]}'. New: '{full_type}'")
+                print(f"WARNING: Line {line_num+1}: Variable '{var_name}' redefined. Using first: '{variable_types[var_name]}'. New: '{full_type}'")
             else:
                 variable_types[var_name] = full_type
-                logging.info(f"  Declared: {var_name} -> {full_type}")
+                print(f"  Declared: {var_name} -> {full_type}")
                 extract_struct_names_from_type(full_type, used_struct_names) # Extract structs from var type
-    
-    logging.info(f"Identified variable types: {variable_types}")
-    logging.info(f"Tentatively identified struct types for stubbing: {used_struct_names}")
 
-
-    logging.info("--- Pass 2: Identifying function calls ---")
+    print("Identifying function calls")
     numeric_param_idx_ref = [1] 
     string_param_idx_ref = [1]
     generic_param_idx_ref = [1]
@@ -237,7 +233,7 @@ def main():
         match = FUNC_CALL_REGEX.match(line)
         if match:
             assigned_var, cast_type_str, func_name, args_str = match.groups()
-            logging.info(f"  Found call: {func_name}({args_str}) on line {line_num+1}")
+            print(f"  Found call: {func_name}({args_str}) on line {line_num+1}")
 
             return_type = "void"
             if cast_type_str:
@@ -248,7 +244,7 @@ def main():
                 extract_struct_names_from_type(return_type, used_struct_names) # Extract from var type
             elif assigned_var:
                 return_type = "void*"
-                logging.warning(f"    Return type for {func_name} from undeclared var '{assigned_var}', using 'void*'.")
+                print(f"    Return type for {func_name} from undeclared var '{assigned_var}', using 'void*'.")
 
             raw_args = split_args(args_str)
             param_details = []
@@ -272,15 +268,16 @@ def main():
             if func_signature_key not in function_stubs:
                 stub = f"{return_type} {func_name}({params_str});"
                 function_stubs[func_signature_key] = stub
-                logging.info(f"    Generated stub: {stub}")
+                print(f"  Stub for function: {stub}")
 
     output_dir = os.path.dirname(os.path.abspath(cpp_filepath))
     patch_file_path = os.path.join(output_dir, "template_patch.h")
 
-    logging.info(f"--- Writing to {patch_file_path} ---")
+    print(f"Generated {len(function_stubs)} function stubs:")
     with open(patch_file_path, 'w', encoding='utf-8') as f:
         f.write("/* Automatically generated stubs and definitions */\n\n")
         
+        #for defining structs
         if used_struct_names:
             f.write("/* Basic struct definitions (placeholders) */\n")
             for s_name in sorted(list(used_struct_names)):
@@ -288,24 +285,21 @@ def main():
                 f.write(f"    // TODO: Define actual members for struct {s_name}\n")
                 f.write(f"    int _placeholder_member_;\n")
                 f.write(f"}};\n")
-                # Optional: common C practice to typedef after struct definition
-                # f.write(f"typedef struct {s_name} {s_name};\n") 
             f.write("\n")
-
+            
+        #for defining constants
         if undefined_constants:
             f.write("/* Potentially undefined constants */\n")
             for const_name in sorted(list(undefined_constants)):
                 f.write(f"#define {const_name} 0 // TODO: Define actual value for {const_name}\n")
             f.write("\n")
-
+            
+        #for defining function stubs
         if function_stubs:
             f.write("/* Function stubs */\n")
             for stub_key in sorted(function_stubs.keys()):
                 f.write(f"{function_stubs[stub_key]}\n")
         f.write("\n/* End of auto-generated content */\n")
-
-    logging.info("Final list of structs for stubbing: %s", sorted(list(used_struct_names)))
-    logging.info("Done.")
 
 if __name__ == "__main__":
     main()
