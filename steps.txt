@@ -1,0 +1,15 @@
+First Run to get line numbers:
+
+Navigate to llvm-project/project
+cd assign_c/ && gcc file_comparator.c && ./a.out test_1_0.c test_1_1.c && cd ..
+
+Next Run this to get IR files with line numbers:
+./c_to_IR.sh ../../llvm-project/build/
+
+
+Next Run the pass on the IR files:
+cd ../build/lib/Transforms/
+make -j7
+cd ../../..
+./build/bin/opt -load build/lib/TaintAnalysisPass.so -enable-new-pm=0 -taint-analysis project/assign_c/output_IR/test_1_0.ll
+cd project
